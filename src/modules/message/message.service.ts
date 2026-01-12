@@ -17,17 +17,17 @@ export class MessageService {
     }
 
     async createMessage(
-        identifier: Types.ObjectId, messageId: number, message_id: number,
+        identifier: Types.ObjectId, messageId: number, forward: number,
     ): Promise<MessageDocument> {
         try {
             const message = await this.messageRepository.createMessage(
                 identifier,
                 messageId,
-                message_id,
+                forward,
             );
 
             this.logger.debug(
-                `Message created: identifier=${identifier}, messageId=${messageId}, forward=${message_id}`,
+                `Message created: identifier=${identifier}, messageId=${messageId}, forward=${forward}`,
             );
 
             return message;
@@ -104,6 +104,30 @@ export class MessageService {
                 limit,
                 skip,
             );
+        } catch (error) {
+            this.logger.error(
+                `Error getting messages for identifier ${identifier}`,
+                error,
+            );
+            throw error;
+        }
+    }
+
+    async getMessageByForward(identifier: Types.ObjectId, forward: number): Promise<Message | null> {
+        try {
+            return await this.messageRepository.findMessageByForward(identifier, forward);
+        } catch (error) {
+            this.logger.error(
+                `Error getting messages for identifier ${identifier}`,
+                error,
+            );
+            throw error;
+        }
+    }
+
+    async getForwardByMessage(identifier: Types.ObjectId, message: number): Promise<Message | null> {
+        try {
+            return await this.messageRepository.findForwardByMessage(identifier, message);
         } catch (error) {
             this.logger.error(
                 `Error getting messages for identifier ${identifier}`,

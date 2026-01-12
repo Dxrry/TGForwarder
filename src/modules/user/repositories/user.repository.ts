@@ -12,12 +12,12 @@ export class UserRepository {
         private readonly userModel: Model<UserDocument>,
     ) {}
 
-    async findByChatId(
-        chatId: number,
-    ): Promise<UserDocument | null> {
-        return this.userModel
-            .findOne({ chat: chatId })
-            .exec();
+    async findByChatId(chatId: number): Promise<UserDocument | null> {
+        return this.userModel.findOne({ chat: chatId }).exec();
+    }
+
+    async findByTheadId(threadId: number): Promise<UserDocument | null> {
+        return this.userModel.findOne({ thread: threadId }).exec();
     }
 
     async existsByChatId(chatId: number): Promise<boolean> {
@@ -54,7 +54,6 @@ export class UserRepository {
 
     async findOrCreate(chatId: number, threadId: number): Promise<{ user: UserDocument; created: boolean }> {
         try {
-            // Atomic upsert operation with setOnInsert to handle concurrency
             const result = await this.userModel.findOneAndUpdate(
                 { chat: chatId },
                 {
@@ -70,7 +69,6 @@ export class UserRepository {
                 },
             ).exec();
 
-            // Check if document was just created by comparing timestamps
             const created = result.createdAt && result.updatedAt 
                 ? result.createdAt.getTime() === result.updatedAt.getTime()
                 : false;

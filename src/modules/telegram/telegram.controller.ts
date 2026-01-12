@@ -1,5 +1,5 @@
 import { Body, Controller, Get, Post, HttpCode, HttpStatus, Logger } from '@nestjs/common';
-import { Message, Update } from 'telegraf/types';
+import { CommonMessageBundle, Message, Update } from 'telegraf/types';
 import { TelegramService } from './telegram.service';
 
 interface SelfWebhookResponse {
@@ -14,7 +14,7 @@ export class TelegramController {
 
     @Post('telegramWebhook')
     @HttpCode(HttpStatus.OK)
-    async handleWebhook(@Body() update: Update.MessageUpdate): Promise<void> {
+    async handleWebhook(@Body() update: Update.MessageUpdate<CommonMessageBundle>): Promise<void> {
         try {
             await this.telegramService.handleIncomingMessage(update);
         } catch (error) {

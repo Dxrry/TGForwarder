@@ -1,9 +1,13 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { Message, Update, UserFromGetMe } from 'telegraf/types';
+import { Injectable, Logger, Type } from '@nestjs/common';
+import { CommonMessageBundle, Message, Update, UserFromGetMe } from 'telegraf/types';
+import { Context } from 'telegraf';
+import { ExtraCopyMessage } from 'telegraf/typings/telegram-types';
 import { UserService } from '../user/user.service';
 import { MessageService } from '../message/message.service';
-import { TelegramBotService } from "./telegram-bot.service";
-import { Context } from 'telegraf';
+import { TelegramBotService } from './telegram-bot.service';
+import { Types } from 'mongoose';
+
+type CopyOptions = Partial<ExtraCopyMessage> & { reply_parameters?: { message_id: number } };
 
 @Injectable()
 export class TelegramService {
@@ -15,106 +19,130 @@ export class TelegramService {
         private readonly messageService: MessageService,
     ) {}
 
-    async handleIncomingMessage(update: Update.MessageUpdate): Promise<void> {
+    async handleIncomingMessage(update: Update.MessageUpdate<CommonMessageBundle>): Promise<void> {
+        const chatId = update.message?.chat?.id;
+        const messageId = update.message?.message_id;
+
+        if (!chatId || !messageId) {
+            this.logger.warn('Missing chatId or messageId', { updateId: update.update_id });
+            return;
+        }
+
+        const botInfo: UserFromGetMe | undefined = this.telegramBotService.botInfo;
+        if (!botInfo) {
+            this.logger.warn('Bot info not available; skipping update', { updateId: update.update_id });
+            return;
+        }
+
+        const ctx = new Context(update as any, this.telegramBotService.bot.telegram, botInfo);
+
         try {
-            const chatId = update.message.chat?.id;
-            const messageId = update.message?.message_id;
-
-            const botInfo: UserFromGetMe | undefined = this.telegramBotService.botInfo;
-            if (botInfo === undefined) {
+            if (update.message.chat.type === 'private') {
+                this.logger.debug(`Private message received: chat=${chatId} msg=${messageId}`);
+                const isRegistered = await this.userService.isRegistered(chatId);
+                if (!isRegistered) {
+                    await this.handleNewUser(ctx, chatId);
+                } else {
+                    await this.handleExistingUser(ctx, chatId);
+                }
+                await this.handleMessage(ctx, update);
+                this.logger.log(`Processed private message: chat=${chatId} msg=${messageId} newUser=${!isRegistered}`);
                 return;
             }
 
-            const ctx = new Context(update, this.telegramBotService.bot.telegram, botInfo);
-
-            if (!chatId || !messageId) {
-                this.logger.warn('Received update without chat ID or message ID', {
-                    updateId: update.update_id,
-                });
+            // If message comes from the bot-managed chat (forum) -> copy into user's thread
+            if (String(update.message.chat.id) === String(this.telegramBotService.chat)) {
+                await this.handleMessageChat(ctx, update);
                 return;
             }
-
-            this.logger.debug(`Processing message: chatId=${chatId}, messageId=${messageId}`);
-            const isRegistered = await this.userService.isRegistered(chatId);
-
-            if (!isRegistered) {
-                await this.handleNewUser(ctx, chatId, messageId);
-            } else {
-                await this.handleExistingUser(ctx, chatId, messageId);
-            }
-
-            await this.handleMessage(update);
-
-            this.logger.log(
-                `Successfully processed message: chatId=${chatId}, messageId=${messageId}, newUser=${!isRegistered}`,
-            );
-        } catch (error) {
-            this.logger.error('Error handling incoming message', error);
-            throw error;
+        } catch (err) {
+            this.logger.error('Error processing incoming message', err);
+            throw err;
         }
     }
 
-    private async handleNewUser(ctx: Context<Update.MessageUpdate<Message>>, chatId: number, messageId: number): Promise<void> {
+    private async handleNewUser(ctx: Context, chatId: number): Promise<void> {
         try {
-            const thread = await ctx.telegram.createForumTopic(
+            const createRes = await ctx.telegram.createForumTopic(
                 this.telegramBotService.chat,
-                ctx.message?.from.last_name
-                    ? `${ctx.message.from.first_name} ${ctx.message.from.last_name}`
-                    : ctx.message?.from.first_name ?? ""
-            )
-            const { user, isNewUser } = await this.userService.registerUser(chatId, thread.message_thread_id);
-            const forwardMessage = await ctx.copyMessage(this.telegramBotService.chat, {
-                message_thread_id: thread.message_thread_id
-            });
-            
-            await this.messageService.createMessage(user._id, messageId, forwardMessage.message_id);
-
-            this.logger.log(
-                `New user flow completed: chatId=${chatId}, userId=${user._id}, actuallyNew=${isNewUser}`,
+                this.safeFullName(ctx.message as Message)
             );
-        } catch (error) {
-            this.logger.error(`Error in new user flow for chatId ${chatId}`, error);
-            throw error;
+
+            const threadId = (createRes as any)?.message_thread_id;
+            const { user, isNewUser } = await this.userService.registerUser(chatId, threadId);
+            this.logger.log(`Registered new user: chat=${chatId} userId=${user._id} actuallyNew=${isNewUser}`);
+        } catch (err) {
+            this.logger.error(`Error in new user flow for chat ${chatId}`, err);
+            throw err;
         }
     }
 
-    private async handleExistingUser(ctx: Context<Update.MessageUpdate<Message>>, chatId: number, messageId: number): Promise<void> {
+    private async handleExistingUser(ctx: Context, chatId: number): Promise<void> {
         try {
             const user = await this.userService.findByChatId(chatId);
-
             if (!user) {
-                this.logger.warn(
-                    `User disappeared between registration check and retrieval: chatId=${chatId}`,
-                );
-                await this.handleNewUser(ctx, chatId, messageId);
+                this.logger.warn(`User missing after registration check; creating new. chat=${chatId}`);
+                await this.handleNewUser(ctx, chatId);
                 return;
             }
-
-            const forwardMessage = await ctx.copyMessage(this.telegramBotService.chat, {
-                message_thread_id: user.thread
-            });
-            
-            await this.messageService.createMessage(user._id, messageId, forwardMessage.message_id);
-
-            this.logger.debug(
-                `Existing user flow completed: chatId=${chatId}, userId=${user._id}`,
-            );
-        } catch (error) {
-            this.logger.error(`Error in existing user flow for chatId ${chatId}`, error);
-            throw error;
+            this.logger.debug(`Existing user found: chat=${chatId} userId=${user._id}`);
+        } catch (err) {
+            this.logger.error(`Error in existing user flow for chat ${chatId}`, err);
+            throw err;
         }
     }
 
-    async handleMessage(update: Update.MessageUpdate): Promise<void> {
+    async handleMessageChat(ctx: Context, update: Update.MessageUpdate<CommonMessageBundle>): Promise<void> {
         try {
-            
+            if (!update.message.is_topic_message || update.message.message_thread_id === undefined) return;
 
+            const user = await this.userService.findByThreadId(update.message.message_thread_id);
+            if (!user?.chat) return;
+
+            const options = await this.buildCopyOptionsFromReply(user._id, update);
+            const forwardMessage = await ctx.copyMessage(user.chat, options as any);
+            await this.messageService.createMessage(user._id, update.message.message_id, forwardMessage.message_id);
             
-            // console.log(await ctx.reply("Fuck"));
-            this.logger.debug(`Received update: ${update.update_id}`);
-        } catch (error) {
-            this.logger.error(`Error handling update ${update.update_id}`, error);
-            throw error;
+            this.logger.debug(`Copied topic message to user chat=${user.chat} update=${update.update_id}`);
+        } catch (err) {
+            this.logger.error(`Error handling chat update ${update.update_id}`, err);
+            throw err;
         }
+    }
+
+    async handleMessage(ctx: Context, update: Update.MessageUpdate<CommonMessageBundle>): Promise<void> {
+        try {
+            const chatId = update.message.chat?.id;
+            const user = chatId ? await this.userService.findByChatId(chatId) : null;
+            if (!user) return;
+
+            const options = await this.buildCopyOptionsFromReply(user._id, update);
+            options.message_thread_id = user.thread;
+
+            const forwardMessage = await ctx.copyMessage(this.telegramBotService.chat, options as any);
+            await this.messageService.createMessage(user._id, update.message.message_id, forwardMessage.message_id);
+
+            this.logger.debug(`Copied user message into forum chat=${this.telegramBotService.chat} update=${update.update_id}`);
+        } catch (err) {
+            this.logger.error(`Error handling message ${update.update_id}`, err);
+            throw err;
+        }
+    }
+
+    private async buildCopyOptionsFromReply(userId: Types.ObjectId, update: Update.MessageUpdate<CommonMessageBundle>): Promise<CopyOptions> {
+        const options: CopyOptions = {};
+        if (update.message?.reply_to_message?.message_id) {
+            const msg = await this.messageService.getMessageByForward(userId, update.message.reply_to_message.message_id);
+            if (msg?.message) {
+                options.reply_parameters = { message_id: msg.message };
+            }
+        }
+        return options;
+    }
+
+    private safeFullName(msg?: Message): string {
+        const first = msg?.from?.first_name ?? '';
+        const last = msg?.from?.last_name ?? '';
+        return `${first}${last ? ' ' + last : ''}`.trim();
     }
 }

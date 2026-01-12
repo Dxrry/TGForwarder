@@ -38,6 +38,15 @@ export class UserService {
             throw error;
         }
     }
+
+    async findByThreadId(threadId: number): Promise<UserDocument | null> {
+        try {
+            return await this.userRepository.findByTheadId(threadId);
+        } catch (error) {
+            this.logger.error(`Error finding user by chatId ${threadId}`, error);
+            throw error;
+        }
+    }
     
     async registerUser(chatId: number, threadId: number): Promise<UserRegistrationResult> {
         try {

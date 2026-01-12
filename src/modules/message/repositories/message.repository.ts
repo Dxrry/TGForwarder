@@ -51,6 +51,20 @@ export class MessageRepository {
         }
     }
 
+    async findMessageByForward(identifier: Types.ObjectId, forward: number): Promise<Message | null> {
+        return this.messageModel
+            .findOne({ identifier, forward })
+            .limit(1)
+            .exec();
+    }
+
+    async findForwardByMessage(identifier: Types.ObjectId, message: number): Promise<Message | null> {
+        return this.messageModel
+            .findOne({ identifier, message })
+            .limit(1)
+            .exec();
+    }
+
     async findMessagesByIdentifier(
         identifier: Types.ObjectId,
         limit: number = 100,
