@@ -50,7 +50,6 @@ export class TelegramService {
                 return;
             }
 
-            // If message comes from the bot-managed chat (forum) -> copy into user's thread
             if (String(update.message.chat.id) === String(this.telegramBotService.chat)) {
                 await this.handleMessageChat(ctx, update);
                 return;
@@ -99,8 +98,13 @@ export class TelegramService {
             const user = await this.userService.findByThreadId(update.message.message_thread_id);
             if (!user?.chat) return;
 
+            const isMessageForward: boolean = !!update.message?.forward_origin;
+
             const options = await this.buildCopyOptionsFromReply(user._id, update);
-            const forwardMessage = await ctx.copyMessage(user.chat, options as any);
+            const forwardMessage = isMessageForward ?
+                await ctx.forwardMessage(user.chat) :
+                await ctx.copyMessage(user.chat, options as any);
+
             await this.messageService.createMessage(user._id, update.message.message_id, forwardMessage.message_id);
             
             this.logger.debug(`Copied topic message to user chat=${user.chat} update=${update.update_id}`);
@@ -116,10 +120,15 @@ export class TelegramService {
             const user = chatId ? await this.userService.findByChatId(chatId) : null;
             if (!user) return;
 
+            const isMessageForward: boolean = !!update.message?.forward_origin;
+
             const options = await this.buildCopyOptionsFromReply(user._id, update);
             options.message_thread_id = user.thread;
 
-            const forwardMessage = await ctx.copyMessage(this.telegramBotService.chat, options as any);
+            const forwardMessage = isMessageForward ?
+                await ctx.forwardMessage(this.telegramBotService.chat, { message_thread_id: user.thread }) :
+                await ctx.copyMessage(this.telegramBotService.chat, options as any);
+
             await this.messageService.createMessage(user._id, update.message.message_id, forwardMessage.message_id);
 
             this.logger.debug(`Copied user message into forum chat=${this.telegramBotService.chat} update=${update.update_id}`);
@@ -131,10 +140,16 @@ export class TelegramService {
 
     private async buildCopyOptionsFromReply(userId: Types.ObjectId, update: Update.MessageUpdate<CommonMessageBundle>): Promise<CopyOptions> {
         const options: CopyOptions = {};
-        if (update.message?.reply_to_message?.message_id) {
-            const msg = await this.messageService.getMessageByForward(userId, update.message.reply_to_message.message_id);
-            if (msg?.message) {
-                options.reply_parameters = { message_id: msg.message };
+        if (update.message?.reply_to_message?.message_id && update.message.reply_to_message.from) {
+            const isSelfReply: boolean = (update.message.reply_to_message.from.id === update.message.from.id);
+
+            const msg = isSelfReply ?
+                await this.messageService.getForwardByMessage(userId, update.message.reply_to_message.message_id) :
+                await this.messageService.getMessageByForward(userId, update.message.reply_to_message.message_id);
+
+            const replyMessageId = isSelfReply ? msg?.forward : msg?.message;
+            if (replyMessageId) {
+                options.reply_parameters = { message_id: replyMessageId };
             }
         }
         return options;
