@@ -12,14 +12,10 @@ interface UserRegistrationResult {
 @Injectable()
 export class UserService {
     private readonly logger = new Logger(UserService.name);
-    private readonly defaultThreadId: number;
 
     constructor(
         private readonly userRepository: UserRepository,
-        private readonly configService: ConfigService,
-    ) {
-        this.defaultThreadId = this.configService.get<number>('DEFAULT_THREAD_ID', 2);
-    }
+    ) {}
 
     async isRegistered(chatId: number): Promise<boolean> {
         try {

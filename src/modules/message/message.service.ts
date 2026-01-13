@@ -7,14 +7,10 @@ import { Message, MessageDocument } from './schemas/message.schema';
 @Injectable()
 export class MessageService {
     private readonly logger = new Logger(MessageService.name);
-    private readonly defaultForwardId: number;
 
     constructor(
         private readonly messageRepository: MessageRepository,
-        private readonly configService: ConfigService,
-    ) {
-        this.defaultForwardId = this.configService.get<number>('DEFAULT_FORWARD_ID', 2);
-    }
+    ) {}
 
     async createMessage(
         identifier: Types.ObjectId, messageId: number, forward: number,
@@ -36,59 +32,6 @@ export class MessageService {
                 `Error creating message for identifier ${identifier}, messageId ${messageId}`,
                 error,
             );
-            throw error;
-        }
-    }
-
-    async createMessageWithCustomForward(
-        identifier: Types.ObjectId,
-        messageId: number,
-        forwardId: number,
-    ): Promise<MessageDocument> {
-        try {
-            const message = await this.messageRepository.createMessage(
-                identifier,
-                messageId,
-                forwardId,
-            );
-
-            this.logger.debug(
-                `Message created with custom forward: identifier=${identifier}, messageId=${messageId}, forward=${forwardId}`,
-            );
-
-            return message;
-        } catch (error) {
-            this.logger.error(
-                `Error creating message with custom forward for identifier ${identifier}`,
-                error,
-            );
-            throw error;
-        }
-    }
-
-    async bulkCreateMessages(
-        messages: Array<{
-            identifier: Types.ObjectId;
-            messageId: number;
-            forwardId?: number;
-        }>,
-    ): Promise<MessageDocument[]> {
-        try {
-            const messagesWithDefaults = messages.map(msg => ({
-                identifier: msg.identifier,
-                message: msg.messageId,
-                forward: msg.forwardId ?? this.defaultForwardId,
-            }));
-
-            const createdMessages = await this.messageRepository.bulkCreateMessages(
-                messagesWithDefaults,
-            );
-
-            this.logger.log(`Bulk created ${createdMessages.length} messages`);
-
-            return createdMessages;
-        } catch (error) {
-            this.logger.error('Error bulk creating messages', error);
             throw error;
         }
     }
